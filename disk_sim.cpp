@@ -1,43 +1,69 @@
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
-#include <matplot/matplot.h>
+/*
+ * disk_sim.cpp — SFML 3 version
+ *
+ * Demonstrates:
+ *  - Bouncing disks with "coin exchange" collisions
+ *  - Real-time chart of fraction of disks vs. coin count
+ *  - Overlap fix to prevent orbiting
+ *  - Velocity multiplier for faster movement
+ *  - Chart scaled 0..0.5, with 0.1 tick marks
+ */
 
+#include <SFML/Graphics.hpp>
+#include <optional>
+#include <random>
 #include <cmath>
 #include <vector>
-#include <random>
 #include <string>
 #include <iostream>
-#include <thread>       // for sleeping (optional)
-#include <chrono>
 
-static const int WIDTH = 800;
-static const int HEIGHT = 600;
-static const int FPS = 60;
-static const int DISK_RADIUS = 40;
-static const int DISK_COUNT = 6;
-static const int MAX_COINS_PER_DISK = 8;
+// ---------------------
+// GLOBAL CONSTANTS
+// ---------------------
+static const int   WIDTH  = 800;
+static const int   HEIGHT = 600;
+static const int   FPS    = 60;
 
-// Global collision count
-static int collision_count = 0;
-// Global cumulative counts for coin states 0..8
-static std::vector<int> cumulative_counts(9, 0);
+static const int   DISK_RADIUS        = 40;
+static const int   DISK_COUNT         = 6;
+static const int   MAX_COINS_PER_DISK = 8;
 
+// Chart region: bottom 200px
+static const float CHART_TOP    = 400.f;
+static const float CHART_HEIGHT = 200.f;
+
+// A factor to scale all disk velocities
+static const float SPEED_MULTIPLIER = 5.0f; // Adjust as desired
+
+// ---------------------
+// GLOBAL VARIABLES
+// ---------------------
+static int collision_count = 0;  // track total collisions
+
+// For chart data: index 0..8 for coin counts
+static std::vector<float> xdata[9];
+static std::vector<float> ydata[9];
+static std::vector<int>   cumulative_counts(9, 0);
+
+// We'll load one global font so it can be used in chart ticks + text
+static sf::Font g_font;
+
+// Disk struct
 struct Disk {
-    float x;
-    float y;
-    float vx;
-    float vy;
-    int radius;
-    int coin_count;
+    float x, y;
+    float vx, vy;
+    int   radius;
+    int   coin_count;
 };
 
+// Distance utility
 float distance(Disk &a, Disk &b) {
     float dx = b.x - a.x;
     float dy = b.y - a.y;
     return std::sqrt(dx*dx + dy*dy);
 }
 
-// Check collision, do coin exchange, return true if collided
+// Collision + coin exchange
 bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
     float dist = distance(d1, d2);
     if (dist < d1.radius + d2.radius) {
@@ -46,17 +72,18 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
         float v1n = d1.vx * nx + d1.vy * ny;
         float v2n = d2.vx * nx + d2.vy * ny;
 
-        // swap normal velocity components
+        // Simple elastic velocity swap
         d1.vx += (v2n - v1n) * nx;
         d1.vy += (v2n - v1n) * ny;
         d2.vx += (v1n - v2n) * nx;
         d2.vy += (v1n - v2n) * ny;
 
-        // coin exchange
+        // Coin exchange
         std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
         int total_coins_d1 = d1.coin_count;
         int total_coins_d2 = d2.coin_count;
 
+        // d1 -> d2
         int coins_moving_to_d2 = 0;
         for (int i = 0; i < total_coins_d1; i++) {
             if (dist01(rng) < 0.5f) {
@@ -66,6 +93,7 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
         d1.coin_count -= coins_moving_to_d2;
         d2.coin_count += coins_moving_to_d2;
 
+        // d2 -> d1
         int coins_moving_to_d1 = 0;
         for (int i = 0; i < total_coins_d2; i++) {
             if (dist01(rng) < 0.5f) {
@@ -75,18 +103,31 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
         d2.coin_count -= coins_moving_to_d1;
         d1.coin_count += coins_moving_to_d1;
 
+        // Clamp
         if (d1.coin_count > MAX_COINS_PER_DISK) d1.coin_count = MAX_COINS_PER_DISK;
         if (d2.coin_count > MAX_COINS_PER_DISK) d2.coin_count = MAX_COINS_PER_DISK;
+
+        // Overlap fix: separate them so they don't embed/orbit
+        float overlap = (d1.radius + d2.radius) - dist;
+        if (overlap > 0.f) {
+            float half = overlap * 0.5f;
+            d1.x -= nx * half;
+            d1.y -= ny * half;
+            d2.x += nx * half;
+            d2.y += ny * half;
+        }
 
         return true;
     }
     return false;
 }
 
+// Move + bounce off edges (top region only)
 void update_position(Disk &disk, float dt) {
     disk.x += disk.vx * dt;
     disk.y += disk.vy * dt;
 
+    // bounce left/right
     if (disk.x - disk.radius < 0) {
         disk.x = disk.radius;
         disk.vx = -disk.vx;
@@ -94,63 +135,20 @@ void update_position(Disk &disk, float dt) {
         disk.x = WIDTH - disk.radius;
         disk.vx = -disk.vx;
     }
+
+    // bounce top/bottom (CHART_TOP is bottom boundary for the disks)
     if (disk.y - disk.radius < 0) {
         disk.y = disk.radius;
         disk.vy = -disk.vy;
-    } else if (disk.y + disk.radius > HEIGHT) {
-        disk.y = HEIGHT - disk.radius;
+    } else if (disk.y + disk.radius > CHART_TOP) {
+        disk.y = CHART_TOP - disk.radius;
         disk.vy = -disk.vy;
     }
 }
 
-// Matplot++ data
-static matplot::figure_handle fig;
-static matplot::axes_handle ax;
-
-static std::vector<std::vector<double>> xdata(9), ydata(9);
-// We'll store line handles for each of the 9 lines
-static std::vector<matplot::line_handle> plot_lines(9);
-
-void setup_matplot_lines() {
-    // Create figure in its own window
-    // Depending on your Matplot++ version, (true) might or might not open new window
-    fig = matplot::figure(true);
-    ax = fig->current_axes();
-    ax->title("Running Average of Coin Counts");
-
-    std::vector<std::string> colors = {
-        "b", "r", "g", "c", "m", "y", "k", "#7f7f7f", "#ff7f0e"
-    };
-    std::vector<std::string> labels = {
-        "0 coins","1 coin","2 coins","3 coins","4 coins",
-        "5 coins","6 coins","7 coins","8 coins"
-    };
-    matplot::hold(ax, true);
-
-    for (int i = 0; i < 9; i++) {
-        // 'plot(...)' might return a single handle or a vector<line_handle>
-        // For older versions that return a single handle, we can do:
-        auto h = matplot::plot(ax, xdata[i], ydata[i]);
-        // 'plot(...)' can return a vector if you pass multiple series, but here it's just one
-
-        h->color(colors[i]);
-        h->display_name(labels[i]);
-        plot_lines[i] = h;
-    }
-
-    matplot::xlabel(ax, "Collision Count");
-    matplot::ylabel(ax, "Running Average Fraction of Disks");
-    matplot::legend(ax);
-    matplot::ylim(ax, {0.0, 1.0});
-    matplot::xlim(ax, {0.0, 10.0});
-
-    // show once
-    matplot::show();
-    matplot::hold(ax, false);
-}
-
+// Update the plot data
 void update_plot(const std::vector<Disk> &disks) {
-    // count how many disks have each coin count
+    // how many disks have each coin count
     std::vector<int> counts(9, 0);
     for (auto &d : disks) {
         counts[d.coin_count]++;
@@ -161,168 +159,192 @@ void update_plot(const std::vector<Disk> &disks) {
         cumulative_counts[i] += counts[i];
     }
 
-    // now compute fraction
+    // push back fraction
     for (int i = 0; i < 9; i++) {
-        xdata[i].push_back((double)collision_count);
-        double fraction = (double)cumulative_counts[i] / (DISK_COUNT * collision_count);
+        xdata[i].push_back(static_cast<float>(collision_count));
+        float fraction = 0.f;
+        if (collision_count > 0) {
+            fraction = static_cast<float>(cumulative_counts[i]) / (DISK_COUNT * collision_count);
+        }
         ydata[i].push_back(fraction);
-
-        // update line
-        plot_lines[i]->x_data(xdata[i]);
-        plot_lines[i]->y_data(ydata[i]);
     }
-
-    // adjust x-limits if collisions > 10
-    if (collision_count > 10) {
-        matplot::xlim(ax, {0.0, (double)collision_count});
-    }
-
-    // redraw figure
-    // Some older versions only have fig->draw() or show()
-    // We'll do fig->draw() to force re-render
-    fig->draw();
-
-    // to mimic a short pause for updates (like pause(0.001)):
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
 
-int main(int argc, char* argv[]) {
+// Draw the line graph (bottom 200px)
+void draw_line_graph(sf::RenderWindow &window) {
+    if (collision_count < 1) {
+        return; // no data yet
+    }
+
+    float chartX     = 0.f;
+    float chartY     = CHART_TOP;
+    float chartWidth = (float)WIDTH;
+    float chartHt    = CHART_HEIGHT;
+
+    // X-axis
+    sf::RectangleShape xAxis(sf::Vector2f(chartWidth, 1.f));
+    xAxis.setPosition(sf::Vector2f(chartX, chartY + chartHt - 1.f));
+    xAxis.setFillColor(sf::Color::White);
+    window.draw(xAxis);
+
+    // Y-axis
+    sf::RectangleShape yAxis(sf::Vector2f(1.f, chartHt));
+    yAxis.setPosition(sf::Vector2f(chartX, chartY));
+    yAxis.setFillColor(sf::Color::White);
+    window.draw(yAxis);
+
+    // Lambda to scale fraction 0..0.5 to chart height
+    auto scaleY = [&](float frac) {
+        if (frac > 0.5f) frac = 0.5f; // clamp top
+        float proportion = frac / 0.5f; // 0..1
+        return chartY + chartHt - (proportion * chartHt);
+    };
+
+    // Tick marks every 0.1 up to 0.5
+    for (float val = 0.f; val <= 0.5f + 0.0001f; val += 0.1f) {
+        float yPos = scaleY(val);
+
+        // a short 5px horizontal line
+        sf::RectangleShape tick(sf::Vector2f(5.f, 1.f));
+        tick.setFillColor(sf::Color::White);
+        tick.setPosition(sf::Vector2f(chartX - 2.f, yPos));
+        window.draw(tick);
+
+        // numeric label
+        sf::Text label(g_font, std::to_string(val), 12);
+        auto lb = label.getLocalBounds();
+        // shift so label's right edge is near the axis
+        label.setOrigin(sf::Vector2f(lb.size.x, lb.size.y * 0.5f));
+        label.setPosition(sf::Vector2f(chartX + 8.f, yPos));
+        label.setFillColor(sf::Color::White);
+        window.draw(label);
+    }
+
+    // scaleX lambda (0..collision_count -> 0..chartWidth)
+    auto scaleX = [&](float xVal) {
+        if (collision_count == 0) return chartX;
+        return chartX + (xVal / float(collision_count)) * chartWidth;
+    };
+
+    // 9 lines (coin counts 0..8), each a LineStrip
+    sf::Color colors[9] = {
+        sf::Color::Blue, sf::Color::Red, sf::Color::Green,
+        sf::Color::Cyan, sf::Color::Magenta, sf::Color::Yellow,
+        sf::Color::White, sf::Color(128,128,128), sf::Color(255,127,0)
+    };
+
+    for (int i = 0; i < 9; i++) {
+        sf::VertexArray lineStrip(sf::PrimitiveType::LineStrip);
+
+        for (size_t k = 0; k < xdata[i].size(); k++) {
+            float px = scaleX(xdata[i][k]);
+            float py = scaleY(ydata[i][k]);
+
+            sf::Vertex v;
+            v.position = sf::Vector2f(px, py);
+            v.color    = colors[i];
+
+            lineStrip.append(v);
+        }
+        window.draw(lineStrip);
+    }
+}
+
+int main() {
+    // Random stuff
     std::random_device rd;
     std::mt19937 rng(rd());
     std::uniform_real_distribution<float> velDist(-200.f, 200.f);
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        std::cerr << "SDL_Init Error: " << SDL_GetError() << "\n";
-        return 1;
-    }
-    if (TTF_Init() == -1) {
-        std::cerr << "TTF_Init Error: " << TTF_GetError() << "\n";
-        SDL_Quit();
-        return 1;
+    // Create the window (SFML 3 style)
+    sf::RenderWindow window(sf::VideoMode({(unsigned)WIDTH, (unsigned)HEIGHT}), "SFML3 Disks + Chart");
+    window.setFramerateLimit(FPS);
+
+    // Load global font
+    if (!g_font.openFromFile("/System/Library/Fonts/SFNSMono.ttf")) {
+        std::cerr << "Failed to open font. Check path!\n";
     }
 
-    SDL_Window* window = SDL_CreateWindow("Bouncing Disks (C++ Matplot)",
-                                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                          WIDTH, HEIGHT, SDL_WINDOW_SHOWN);
-    if (!window) {
-        std::cerr << "SDL_CreateWindow Error: " << SDL_GetError() << "\n";
-        TTF_Quit();
-        SDL_Quit();
-        return 1;
-    }
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (!renderer) {
-        std::cerr << "SDL_CreateRenderer Error: " << SDL_GetError() << "\n";
-        SDL_DestroyWindow(window);
-        TTF_Quit();
-        SDL_Quit();
-        return 1;
-    }
-    TTF_Font* font = TTF_OpenFont("/System/Library/Fonts/Helvetica.ttc", 24);
-    if (!font) {
-        std::cerr << "TTF_OpenFont Error: " << TTF_GetError() << "\n";
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        TTF_Quit();
-        SDL_Quit();
-        return 1;
-    }
-
-    // Setup the matplot figure/lines
-    setup_matplot_lines();
-
-    // create disks
+    // Create disks
     std::vector<Disk> disks(DISK_COUNT);
     std::vector<int> distribution = {8, 0, 0, 0, 0, 0};
     for (int i = 0; i < DISK_COUNT; i++) {
-        float x = (float)(DISK_RADIUS + rand() % (WIDTH - 2*DISK_RADIUS));
-        float y = (float)(DISK_RADIUS + rand() % (HEIGHT - 2*DISK_RADIUS));
-        float vx = velDist(rng);
-        float vy = velDist(rng);
-        disks[i] = Disk{x,y,vx,vy,DISK_RADIUS,distribution[i]};
+        float x  = (float)(DISK_RADIUS + rand() % (int(CHART_TOP) - 2 * DISK_RADIUS));
+        float y  = (float)(DISK_RADIUS + rand() % (int(CHART_TOP) - 2 * DISK_RADIUS));
+        float vx = velDist(rng) * SPEED_MULTIPLIER;  // scale velocity
+        float vy = velDist(rng) * SPEED_MULTIPLIER;  // scale velocity
+        disks[i] = Disk{x, y, vx, vy, DISK_RADIUS, distribution[i]};
     }
 
+    // Time-based throttle
+    float time_since_plot = 0.f;
+    sf::Clock clock;
     bool running = true;
-    Uint32 lastTicks = SDL_GetTicks();
 
-    while (running) {
-        Uint32 currentTicks = SDL_GetTicks();
-        float dt = (currentTicks - lastTicks) / 1000.0f;
-        lastTicks = currentTicks;
+    while (running && window.isOpen()) {
+        float dt = clock.restart().asSeconds();
 
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) {
+        // Poll events
+        while (auto evOpt = window.pollEvent()) {
+            sf::Event e = *evOpt;
+            // SFML 3 style: check if e is "Closed"
+            if (e.is<sf::Event::Closed>()) {
+                window.close();
                 running = false;
+                break;
             }
         }
 
-        // update positions
+        // Update positions
         for (auto &d : disks) {
             update_position(d, dt);
         }
-        // collisions
+
+        // Collisions
+        int collisions_this_frame = 0;
         for (int i = 0; i < DISK_COUNT; i++) {
-            for (int j = i+1; j < DISK_COUNT; j++) {
-                bool collided = handle_disk_collision(disks[i], disks[j], rng);
-                if (collided) {
-                    collision_count++;
-                    update_plot(disks);
+            for (int j = i + 1; j < DISK_COUNT; j++) {
+                if (handle_disk_collision(disks[i], disks[j], rng)) {
+                    collisions_this_frame++;
                 }
             }
         }
+        collision_count += collisions_this_frame;
 
-        // render SDL
-        SDL_SetRenderDrawColor(renderer, 0,0,0,255);
-        SDL_RenderClear(renderer);
+        // Chart update every 0.1s if collisions happened
+        time_since_plot += dt;
+        if (time_since_plot >= 0.1f && collision_count > 0) {
+            update_plot(disks);
+            time_since_plot = 0.f;
+        }
 
+        // Render
+        window.clear(sf::Color::Black);
+
+        // Draw disks
         for (auto &d : disks) {
-            // draw circle
-            SDL_SetRenderDrawColor(renderer, 0,128,255,255);
-            for (int w = -d.radius; w <= d.radius; w++) {
-                for (int h = -d.radius; h <= d.radius; h++) {
-                    if (w*w + h*h <= d.radius*d.radius) {
-                        int px = (int)d.x + w;
-                        int py = (int)d.y + h;
-                        SDL_RenderDrawPoint(renderer, px, py);
-                    }
-                }
-            }
-            // coin count
-            SDL_Color textColor = {255,255,255,255};
-            std::string text = std::to_string(d.coin_count);
-            SDL_Surface* surf = TTF_RenderText_Solid(font, text.c_str(), textColor);
-            if (surf) {
-                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-                if (tex) {
-                    int tw=0, th=0;
-                    SDL_QueryTexture(tex, nullptr, nullptr, &tw,&th);
-                    SDL_Rect dst{(int)d.x - tw/2, (int)d.y - th/2, tw, th};
-                    SDL_RenderCopy(renderer, tex, nullptr, &dst);
-                    SDL_DestroyTexture(tex);
-                }
-                SDL_FreeSurface(surf);
-            }
+            // Circle
+            sf::CircleShape circle(d.radius);
+            circle.setFillColor(sf::Color(0,128,255));
+            circle.setPosition(sf::Vector2f(d.x - d.radius, d.y - d.radius));
+            window.draw(circle);
+
+            // Coin count (requires direct constructor in SFML 3)
+            sf::Text text(g_font, std::to_string(d.coin_count), 24);
+            text.setFillColor(sf::Color::White);
+
+            // Center in the disk
+            auto bounds = text.getLocalBounds();
+            text.setOrigin(sf::Vector2f(bounds.size.x * 0.5f, bounds.size.y * 0.5f));
+            text.setPosition(sf::Vector2f(d.x, d.y));
+            window.draw(text);
         }
 
-        SDL_RenderPresent(renderer);
+        // Draw chart in bottom region
+        draw_line_graph(window);
 
-        // limit ~60 fps
-        Uint32 frameTime = SDL_GetTicks() - currentTicks;
-        if (frameTime < (1000 / FPS)) {
-            SDL_Delay((1000 / FPS) - frameTime);
-        }
+        window.display();
     }
-
-    // cleanup
-    TTF_CloseFont(font);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    TTF_Quit();
-    SDL_Quit();
-
-    // If your version has a "close()" that takes a figure_handle, you can do:
-    // matplot::close(fig);
 
     return 0;
 }
