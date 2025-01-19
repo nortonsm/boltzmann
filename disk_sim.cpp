@@ -190,15 +190,13 @@ void update_plot(const std::vector<Disk> &disks) {
     for (int i = 0; i < 9; i++) {
         xdata[i].push_back(static_cast<float>(collision_count));
 
-        float fraction = 0.f;
+        float avgNum = 0.f;
         if (collision_count > 0) {
-            fraction = static_cast<float>(cumulative_counts[i])
-                     / (DISK_COUNT * collision_count);
+            // average number of disks = (total count of i-coins) / number_of_collisions
+            avgNum = static_cast<float>(cumulative_counts[i]) / collision_count;
         }
-        ydata[i].push_back(fraction);
-
-        // Store fraction in global array for the stats window
-        g_coinFraction[i] = fraction;
+        ydata[i].push_back(avgNum);
+        g_coinFraction[i] = avgNum;
     }
 }
 
@@ -228,16 +226,17 @@ void draw_line_graph(sf::RenderWindow &window) {
     yAxis.setFillColor(sf::Color::White);
     window.draw(yAxis);
 
-    // scaleY lambda (0..0.5 => chartHt)
-    auto scaleY = [&](float frac) {
-        if (frac > 0.5f) frac = 0.5f;
-        float proportion = frac / 0.5f; // 0..1
+    // Change to range 0..6:
+    auto scaleY = [&](float val) {
+        if (val > 6.f) val = 6.f;
+        float proportion = val / 6.f; // 0..1
         return chartY + chartHt - (proportion * chartHt);
     };
 
-    // Tick marks at 0.0..0.5
-    for (float val = 0.f; val <= 0.5f + 0.0001f; val += 0.1f) {
-        float yPos = scaleY(val);
+
+    // Tick marks at integer steps 0..6:
+    for (int val = 0; val <= 6; val++) {
+        float yPos = scaleY(static_cast<float>(val));
 
         // short tick line
         sf::RectangleShape tick(sf::Vector2f(5.f, 1.f));
@@ -301,12 +300,20 @@ void draw_stats_window(sf::RenderWindow &stats) {
         stats.draw(title);
     }
 
+    // Now show total collisions:
+    {
+        sf::Text collisionsText(g_font, "Collisions: " + std::to_string(collision_count), 16);
+        collisionsText.setFillColor(sf::Color::White);
+        collisionsText.setPosition(sf::Vector2f(10.f, 35.f));
+        stats.draw(collisionsText);
+    }
     // For each coin count 0..8, show fraction w/ 3 decimals
-    float yOffset = 50.f;
+    float yOffset = 60.f;
+
     for (int c = 0; c < 9; c++) {
         std::stringstream ss;
         ss << c << " coins = "
-           << std::fixed << std::setprecision(3) << g_coinFraction[c];
+           << std::fixed << std::setprecision(2) << g_coinFraction[c];
 
         sf::Text line(g_font, ss.str(), 14);
         line.setFillColor(sf::Color::White);
