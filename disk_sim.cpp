@@ -111,6 +111,8 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
                 coins_to_d2++;
             }
         }
+        // Ensure we only subtract up to the number of coins available
+        coins_to_d2 = std::min(coins_to_d2, d1.coin_count);
         d1.coin_count -= coins_to_d2;
         d2.coin_count += coins_to_d2;
 
@@ -120,8 +122,11 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
                 coins_to_d1++;
             }
         }
+        // Ensure we only subtract up to the number of coins available
+        coins_to_d1 = std::min(coins_to_d1, d2.coin_count);
         d2.coin_count -= coins_to_d1;
         d1.coin_count += coins_to_d1;
+
 
         // Clamp
         if (d1.coin_count > MAX_COINS_PER_DISK) d1.coin_count = MAX_COINS_PER_DISK;
