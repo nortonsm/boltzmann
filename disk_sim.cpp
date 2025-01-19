@@ -90,23 +90,26 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
         int total_coins_d1 = d1.coin_count;
         int total_coins_d2 = d2.coin_count;
 
-        // d1 -> d2
+        // Standard coin exchange (50% chance for each coin)
         int coins_to_d2 = 0;
         for (int i = 0; i < total_coins_d1; i++) {
             if (dist01(rng) < 0.5f) {
                 coins_to_d2++;
             }
         }
+        // Ensure we only subtract up to the number of coins available
+        coins_to_d2 = std::min(coins_to_d2, d1.coin_count);
         d1.coin_count -= coins_to_d2;
         d2.coin_count += coins_to_d2;
 
-        // d2 -> d1
         int coins_to_d1 = 0;
         for (int i = 0; i < total_coins_d2; i++) {
             if (dist01(rng) < 0.5f) {
                 coins_to_d1++;
             }
         }
+        // Ensure we only subtract up to the number of coins available
+        coins_to_d1 = std::min(coins_to_d1, d2.coin_count);
         d2.coin_count -= coins_to_d1;
         d1.coin_count += coins_to_d1;
 
