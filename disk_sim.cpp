@@ -73,6 +73,7 @@ float distance(Disk &a, Disk &b) {
 bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
     float dist = distance(d1, d2);
     if (dist < d1.radius + d2.radius) {
+        // --- Elastic collision (equal masses) ---
         float nx = (d2.x - d1.x) / dist;
         float ny = (d2.y - d1.y) / dist;
 
@@ -85,39 +86,30 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
         d2.vx += (v1n - v2n) * nx;
         d2.vy += (v1n - v2n) * ny;
 
-        // Coin exchange (random)
-        std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
-        int total_coins_d1 = d1.coin_count;
-        int total_coins_d2 = d2.coin_count;
+        // --- Uniform Probability Redistribution for coin exchange ---
+        int total_coins = d1.coin_count + d2.coin_count;
 
-        // Standard coin exchange (50% chance for each coin)
-        int coins_to_d2 = 0;
-        for (int i = 0; i < total_coins_d1; i++) {
-            if (dist01(rng) < 0.5f) {
-                coins_to_d2++;
+        // Build a list of all valid ways to split 'total_coins'
+        // such that neither disk exceeds MAX_COINS_PER_DISK
+        std::vector<std::pair<int, int>> possible_redistributions;
+        possible_redistributions.reserve(total_coins + 1);
+
+        for (int coins_in_d1 = 0; coins_in_d1 <= total_coins; coins_in_d1++) {
+            int coins_in_d2 = total_coins - coins_in_d1;
+            if (coins_in_d1 <= MAX_COINS_PER_DISK && coins_in_d2 <= MAX_COINS_PER_DISK) {
+                possible_redistributions.emplace_back(coins_in_d1, coins_in_d2);
             }
         }
-        // Ensure we only subtract up to the number of coins available
-        coins_to_d2 = std::min(coins_to_d2, d1.coin_count);
-        d1.coin_count -= coins_to_d2;
-        d2.coin_count += coins_to_d2;
 
-        int coins_to_d1 = 0;
-        for (int i = 0; i < total_coins_d2; i++) {
-            if (dist01(rng) < 0.5f) {
-                coins_to_d1++;
-            }
-        }
-        // Ensure we only subtract up to the number of coins available
-        coins_to_d1 = std::min(coins_to_d1, d2.coin_count);
-        d2.coin_count -= coins_to_d1;
-        d1.coin_count += coins_to_d1;
+        // Randomly choose one of the valid redistributions
+        std::uniform_int_distribution<size_t> uni_dist(0, possible_redistributions.size() - 1);
+        size_t idx = uni_dist(rng);
 
-        // Clamp
-        if (d1.coin_count > MAX_COINS_PER_DISK) d1.coin_count = MAX_COINS_PER_DISK;
-        if (d2.coin_count > MAX_COINS_PER_DISK) d2.coin_count = MAX_COINS_PER_DISK;
+        // Apply the selected redistribution
+        d1.coin_count = possible_redistributions[idx].first;
+        d2.coin_count = possible_redistributions[idx].second;
 
-        // Overlap fix
+        // --- Overlap fix (push disks apart if they overlap) ---
         float overlap = (d1.radius + d2.radius) - dist;
         if (overlap > 0.f) {
             float half = overlap * 0.5f;
@@ -131,6 +123,7 @@ bool handle_disk_collision(Disk &d1, Disk &d2, std::mt19937 &rng) {
     }
     return false;
 }
+
 
 // ------------------------------------
 // update_position: uses g_speedFactor
